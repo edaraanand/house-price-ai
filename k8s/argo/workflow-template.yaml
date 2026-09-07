@@ -27,7 +27,7 @@ spec:
   arguments:
     parameters:
       - name: pipeline-image
-        value: "docker.io/edaraanand/house-price-ai:pipeline-cfe34d4"
+        value: "docker.io/edaraanand/house-price-ai:pipeline-9ca717a"
       - name: mlflow-tracking-uri
         value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
       - name: model-name

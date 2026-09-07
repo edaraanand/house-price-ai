@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: house-price-serving
-          image: edaraanand/house-price-ai:cfe34d4
+          image: edaraanand/house-price-ai:9ca717a
           imagePullPolicy: Always
 
           ports:
