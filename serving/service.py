@@ -44,7 +44,7 @@ class HousingModelService:
 
         data = pd.DataFrame(
             [
-                request.model_dump()
+                input_data.model_dump()
             ]
         )
 
