@@ -13,7 +13,7 @@ MLFLOW_TRACKING_URI = os.getenv(
 
 MLFLOW_MODEL_NAME = os.getenv(
 "MLFLOW_MODEL_NAME",
-"california_housing_ai",
+"california_housing_model",
 )
 
 MLFLOW_MODEL_ALIAS = os.getenv(
