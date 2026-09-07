@@ -33,7 +33,7 @@ spec:
               value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
 
             - name: MLFLOW_MODEL_NAME
-              value: "california_housing_ai"
+              value: "california_housing_model"
 
             - name: MLFLOW_MODEL_ALIAS
               value: "production"

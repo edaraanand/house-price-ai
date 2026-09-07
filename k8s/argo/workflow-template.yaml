@@ -78,7 +78,7 @@ spec:
       # It can contain XGBoost, Random Forest, or
       # HistGradientBoosting depending on which wins.
       - name: model-name
-        value: "california_housing_ai"
+        value: "california_housing_model"
 
       # Number of parallel tuning workers.
       #
