@@ -65,6 +65,7 @@ spec:
           - name: restart-serving
             template: restart-serving
             dependencies: [promote]
+            when: "{{tasks.promote.status}} == Succeeded"
 
     - name: train
       container:
