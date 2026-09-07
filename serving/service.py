@@ -8,7 +8,7 @@ from serving.schemas import HousingRequest, HousingResponse
 
 MLFLOW_TRACKING_URI = os.getenv(
 "MLFLOW_TRACKING_URI",
-"http://mlflow.mlops.svc.cluster.local:5000",
+"http://mlflow-mlflow.mlflow.svc.cluster.local:5000",
 )
 
 MLFLOW_MODEL_NAME = os.getenv(

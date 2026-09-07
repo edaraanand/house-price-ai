@@ -30,7 +30,7 @@ spec:
 
           env:
             - name: MLFLOW_TRACKING_URI
-              value: "http://mlflow.mlops.svc.cluster.local:5000"
+              value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
 
             - name: MLFLOW_MODEL_NAME
               value: "xgboost-regression"
