@@ -1,10 +1,31 @@
-# Train -> resolve current production baseline -> evaluate -> promote (only
-# if the promotion gate passes) -> restart serving so it picks up the new
-# model. Submit with:
+# ============================================================
+# House Price ML Pipeline
 #
-#   argo submit -n argo --from workflowtemplate/house-price-pipeline --watch
+# Flow:
 #
-# or, without the argo CLI:
+#   Parallel hyperparameter tuning
+#             ↓
+#   Compare all algorithm/configuration runs
+#             ↓
+#   Register ONLY winning model
+#             ↓
+#   Resolve current Production baseline
+#             ↓
+#   Evaluate candidate vs baseline
+#             ↓
+#   Promotion gate
+#             ↓
+#   Promote winner if gate passes
+#             ↓
+#   Restart serving
+#
+# Submit with:
+#
+#   argo submit -n argo \
+#     --from workflowtemplate/house-price-pipeline \
+#     --watch
+#
+# Or:
 #
 #   kubectl create -n argo -f - <<'EOF'
 #   apiVersion: argoproj.io/v1alpha1
@@ -15,158 +36,468 @@
 #     workflowTemplateRef:
 #       name: house-price-pipeline
 #   EOF
+#
+# ============================================================
+
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
+
 metadata:
   name: house-price-pipeline
   namespace: argo
+
 spec:
   serviceAccountName: argo-workflow
+
   entrypoint: main
+
+  # ==========================================================
+  # WORKFLOW PARAMETERS
+  # ==========================================================
 
   arguments:
     parameters:
+
+      # Pipeline image containing:
+      #
+      #   multi_train.py
+      #   tune.py
+      #   evaluate.py
+      #   promote.py
+      #   src/
+      #   config.yaml
+      #
       - name: pipeline-image
         value: "docker.io/edaraanand/house-price-ai:pipeline-9ca717a"
       - name: mlflow-tracking-uri
         value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
+
+      # Single registered model representing the
+      # currently selected/best house-price model.
+      #
+      # It can contain XGBoost, Random Forest, or
+      # HistGradientBoosting depending on which wins.
       - name: model-name
-        value: "xgboost-regression"
+        value: "california_housing_model"
+
+      # Number of parallel tuning workers.
+      #
+      # This must also be present in config.yaml.
+      #
+      # Example:
+      #
+      #   tuning:
+      #     max_workers: 4
+      #
+      - name: tuning-workers
+        value: "4"
+
+
+  # ==========================================================
+  # TEMPLATES
+  # ==========================================================
 
   templates:
-    - name: main
-      dag:
-        tasks:
-          - name: train
-            template: train
 
+    # ========================================================
+    # MAIN DAG
+    # ========================================================
+
+    - name: main
+
+      dag:
+
+        tasks:
+
+          # --------------------------------------------------
+          # 1. PARALLEL HYPERPARAMETER TUNING
+          # --------------------------------------------------
+          #
+          # tune.py:
+          #
+          #   XGBoost
+          #   Random Forest
+          #   HistGradientBoosting
+          #
+          # Each algorithm can have multiple parameter
+          # combinations.
+          #
+          # ProcessPoolExecutor runs jobs concurrently.
+          #
+          - name: tune
+            template: tune
+
+
+          # --------------------------------------------------
+          # 2. RESOLVE CURRENT PRODUCTION MODEL
+          # --------------------------------------------------
+          #
+          # This runs independently from tuning.
+          #
+          # It finds the current MLflow "production"
+          # alias.
+          #
           - name: resolve-baseline
             template: resolve-baseline
 
+
+          # --------------------------------------------------
+          # 3. EVALUATE WINNER AGAINST PRODUCTION
+          # --------------------------------------------------
+          #
+          # tune.py has already selected the best candidate
+          # and registered it.
+          #
+          # evaluate.py compares:
+          #
+          #   candidate-version
+          #          VS
+          #   baseline-version
+          #
           - name: evaluate
+
             template: evaluate
-            dependencies: [train, resolve-baseline]
+
+            dependencies:
+              - tune
+              - resolve-baseline
+
             arguments:
               parameters:
+
                 - name: candidate-version
-                  value: "{{tasks.train.outputs.parameters.candidate-version}}"
+                  value: "{{tasks.tune.outputs.parameters.candidate-version}}"
+
                 - name: baseline-version
                   value: "{{tasks.resolve-baseline.outputs.result}}"
 
+
+          # --------------------------------------------------
+          # 4. PROMOTE IF EVALUATION PASSES
+          # --------------------------------------------------
+
           - name: promote
+
             template: promote
-            dependencies: [evaluate]
-            when: "{{tasks.evaluate.outputs.parameters.passed}} == true"
+
+            dependencies:
+              - evaluate
+
+            when: >-
+              "{{tasks.evaluate.outputs.parameters.passed}}"
+              == "true"
+
             arguments:
               parameters:
+
                 - name: version
-                  value: "{{tasks.train.outputs.parameters.candidate-version}}"
+                  value: "{{tasks.tune.outputs.parameters.candidate-version}}"
 
+
+          # --------------------------------------------------
+          # 5. RESTART SERVING
+          # --------------------------------------------------
+          #
+          # Only restart if promotion succeeded.
+          #
           - name: restart-serving
-            template: restart-serving
-            dependencies: [promote]
-            when: "{{tasks.promote.status}} == Succeeded"
 
-    - name: train
+            template: restart-serving
+
+            dependencies:
+              - promote
+
+            when: >-
+              "{{tasks.promote.status}}"
+              == "Succeeded"
+
+
+    # ========================================================
+    # TUNE
+    # ========================================================
+
+    - name: tune
+
       container:
+
         image: "{{workflow.parameters.pipeline-image}}"
-        command: [sh, -c]
+
+        command:
+          - sh
+          - -c
+
         args:
-          - "mkdir -p /tmp/outputs && python train.py"
+          - |
+            set -e
+
+            echo "=============================================="
+            echo "STARTING PARALLEL HYPERPARAMETER TUNING"
+            echo "=============================================="
+
+            echo "MLflow:    ${MLFLOW_TRACKING_URI}"
+            echo "Model:     ${MLFLOW_MODEL_NAME}"
+            echo "Workers:   ${TUNING_MAX_WORKERS}"
+
+            mkdir -p /tmp/outputs
+
+            python tune.py
+
+            echo "=============================================="
+            echo "TUNING COMPLETE"
+            echo "=============================================="
+
+            echo "Winner:"
+            echo "  Run ID: $(cat /tmp/outputs/run_id)"
+            echo "  Model:  ${MLFLOW_MODEL_NAME}"
+            echo "  Version: $(cat /tmp/outputs/model_version)"
+            echo "  RMSE:   $(cat /tmp/outputs/rmse)"
+
         env:
+
           - name: MLFLOW_TRACKING_URI
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
+
           - name: MLFLOW_MODEL_NAME
             value: "{{workflow.parameters.model-name}}"
+
           - name: MLFLOW_EXPERIMENT_NAME
             value: "{{workflow.parameters.model-name}}"
+
+          - name: TUNING_MAX_WORKERS
+            value: "{{workflow.parameters.tuning-workers}}"
+
           - name: PIPELINE_OUTPUT_DIR
             value: /tmp/outputs
+
       outputs:
+
         parameters:
+
           - name: candidate-version
+
             valueFrom:
               path: /tmp/outputs/model_version
+
+          - name: run-id
+
+            valueFrom:
+              path: /tmp/outputs/run_id
+
           - name: rmse
+
             valueFrom:
               path: /tmp/outputs/rmse
 
+
+    # ========================================================
+    # RESOLVE BASELINE
+    # ========================================================
+
     - name: resolve-baseline
+
       script:
+
         image: "{{workflow.parameters.pipeline-image}}"
-        command: [python]
+
+        command:
+          - python
+
         env:
+
           - name: MLFLOW_TRACKING_URI
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
+
           - name: MLFLOW_MODEL_NAME
             value: "{{workflow.parameters.model-name}}"
+
         source: |
           import os
+
           from mlflow import MlflowClient
 
-          client = MlflowClient(tracking_uri=os.environ["MLFLOW_TRACKING_URI"])
-          name = os.environ["MLFLOW_MODEL_NAME"]
 
-          # "0" means no baseline yet -> evaluate.py auto-bootstraps.
+          tracking_uri = os.environ[
+              "MLFLOW_TRACKING_URI"
+          ]
+
+          model_name = os.environ[
+              "MLFLOW_MODEL_NAME"
+          ]
+
+
+          client = MlflowClient(
+              tracking_uri=tracking_uri
+          )
+
+
+          # "0" means there is no production
+          # baseline yet.
+          #
+          # evaluate.py can bootstrap the first
+          # production model.
+
           version = "0"
+
+
           try:
-              model = client.get_registered_model(name)
-              alias_version = model.aliases.get("production")
-              if alias_version:
-                  version = str(alias_version)
+
+              model = client.get_registered_model(
+                  model_name
+              )
+
+              production_version = (
+                  model.aliases.get(
+                      "production"
+                  )
+              )
+
+              if production_version:
+
+                  version = str(
+                      production_version
+                  )
+
+
           except Exception:
+
+              # Registered model may not exist
+              # on the first pipeline execution.
+
               pass
+
 
           print(version)
 
+
+    # ========================================================
+    # EVALUATE
+    # ========================================================
+
     - name: evaluate
+
       inputs:
+
         parameters:
+
           - name: candidate-version
+
           - name: baseline-version
+
+
       container:
+
         image: "{{workflow.parameters.pipeline-image}}"
-        command: [sh, -c]
+
+        command:
+          - sh
+          - -c
+
         args:
-          - "mkdir -p /tmp/outputs && python evaluate.py --candidate-version {{inputs.parameters.candidate-version}} --baseline-version {{inputs.parameters.baseline-version}}"
+          - |
+            set -e
+
+            mkdir -p /tmp/outputs
+
+            echo "=============================================="
+            echo "MODEL EVALUATION"
+            echo "=============================================="
+
+            echo "Candidate version:"
+            echo "{{inputs.parameters.candidate-version}}"
+
+            echo "Baseline version:"
+            echo "{{inputs.parameters.baseline-version}}"
+
+            python evaluate.py \
+              --candidate-version "{{inputs.parameters.candidate-version}}" \
+              --baseline-version "{{inputs.parameters.baseline-version}}"
+
+            echo "=============================================="
+            echo "EVALUATION COMPLETE"
+            echo "=============================================="
+
         env:
+
           - name: MLFLOW_TRACKING_URI
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
+
           - name: MLFLOW_MODEL_NAME
             value: "{{workflow.parameters.model-name}}"
+
           - name: PIPELINE_OUTPUT_DIR
             value: /tmp/outputs
+
+
       outputs:
+
         parameters:
+
           - name: passed
+
             valueFrom:
               path: /tmp/outputs/passed
 
+
+    # ========================================================
+    # PROMOTE
+    # ========================================================
+
     - name: promote
+
       inputs:
+
         parameters:
+
           - name: version
+
+
       container:
+
         image: "{{workflow.parameters.pipeline-image}}"
-        command: [python, promote.py]
+
+        command:
+          - python
+          - promote.py
+
         args:
+
           - "--version"
+
           - "{{inputs.parameters.version}}"
+
           - "--stage"
+
           - "Production"
+
         env:
+
           - name: MLFLOW_TRACKING_URI
             value: "{{workflow.parameters.mlflow-tracking-uri}}"
+
           - name: MLFLOW_MODEL_NAME
             value: "{{workflow.parameters.model-name}}"
 
+
+    # ========================================================
+    # RESTART SERVING
+    # ========================================================
+
     - name: restart-serving
+
       container:
+
         image: "docker.io/bitnami/kubectl:latest"
+
         command:
+
           - kubectl
+
           - -n
+
           - mlops
+
           - rollout
+
           - restart
+
           - deployment/house-price-serving

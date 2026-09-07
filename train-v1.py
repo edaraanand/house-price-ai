@@ -24,6 +24,20 @@ Flow:
         ↓
     optionally register model
 """
+
+"""
+train.py
+
+Train a single XGBoost model and log it to MLflow.
+
+This module can be used by:
+    - normal training
+    - hyperparameter tuning
+
+Registration is optional. During tuning, models are logged but not
+registered. tune.py selects the best run and registers only the winner.
+"""
+
 import os
 import sys
 from pathlib import Path
@@ -67,16 +81,24 @@ def write_pipeline_outputs(run_id, model_version, metrics):
     output_dir = Path(PIPELINE_OUTPUT_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    (output_dir / "model_version").write_text(str(model_version))
-    (output_dir / "run_id").write_text(str(run_id))
-    (output_dir / "rmse").write_text(f"{metrics['rmse']:.6f}")
+    (output_dir / "model_version").write_text(
+        str(model_version)
+    )
+
+    (output_dir / "run_id").write_text(
+        str(run_id)
+    )
+
+    (output_dir / "rmse").write_text(
+        f"{metrics['rmse']:.6f}"
+    )
 
 
 def main(
     param_overrides=None,
     run_name=None,
     register_model=True,
-    run_type="training"
+    run_type="training",
 ):
     config = load_config()
 
@@ -130,6 +152,10 @@ def main(
 
     with mlflow.start_run(run_name=run_name) as run:
 
+        # --------------------------------------------------
+        # Train
+        # --------------------------------------------------
+
         result = train_model(
             X_train=X_train,
             y_train=y_train,
@@ -172,8 +198,8 @@ def main(
             {
                 "model_name": model_name,
                 "dataset": dataset_config["name"],
+                "run_type": run_type,
                 "lifecycle": "candidate",
-                "run_type": run_type
             }
         )
 
@@ -187,13 +213,15 @@ def main(
         )
 
         # --------------------------------------------------
-        # Register model
+        # Optional registration
         # --------------------------------------------------
 
         registered_model = None
 
         if register_model:
-            model_uri = f"runs:/{run.info.run_id}/model"
+            model_uri = (
+                f"runs:/{run.info.run_id}/model"
+            )
 
             registered_model = mlflow.register_model(
                 model_uri=model_uri,
@@ -208,17 +236,37 @@ def main(
         print("=" * 60)
         print("TRAINING COMPLETE")
         print("=" * 60)
+
         print(f"Run ID:          {run.info.run_id}")
         print(f"Run Name:        {run_name}")
         print(f"Model Name:      {model_name}")
 
         if registered_model:
-            print(f"Model Version:   {registered_model.version}")
+            print(
+                f"Model Version:   "
+                f"{registered_model.version}"
+            )
 
-        print(f"RMSE:            {result.metrics['rmse']:.4f}")
-        print(f"MAE:             {result.metrics['mae']:.4f}")
-        print(f"R2:              {result.metrics['r2']:.4f}")
-        print(f"Model URI:       runs:/{run.info.run_id}/model")
+        print(
+            f"RMSE:            "
+            f"{result.metrics['rmse']:.4f}"
+        )
+
+        print(
+            f"MAE:             "
+            f"{result.metrics['mae']:.4f}"
+        )
+
+        print(
+            f"R2:              "
+            f"{result.metrics['r2']:.4f}"
+        )
+
+        print(
+            f"Model URI:       "
+            f"runs:/{run.info.run_id}/model"
+        )
+
         print("=" * 60)
 
         if registered_model:
@@ -232,7 +280,9 @@ def main(
             "run_id": run.info.run_id,
             "run_name": run_name,
             "metrics": result.metrics,
-            "model_uri": f"runs:/{run.info.run_id}/model",
+            "model_uri": (
+                f"runs:/{run.info.run_id}/model"
+            ),
             "model_version": (
                 registered_model.version
                 if registered_model

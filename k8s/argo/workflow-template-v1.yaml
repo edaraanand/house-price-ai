@@ -1,0 +1,172 @@
+# Train -> resolve current production baseline -> evaluate -> promote (only
+# if the promotion gate passes) -> restart serving so it picks up the new
+# model. Submit with:
+#
+#   argo submit -n argo --from workflowtemplate/house-price-pipeline --watch
+#
+# or, without the argo CLI:
+#
+#   kubectl create -n argo -f - <<'EOF'
+#   apiVersion: argoproj.io/v1alpha1
+#   kind: Workflow
+#   metadata:
+#     generateName: house-price-pipeline-
+#   spec:
+#     workflowTemplateRef:
+#       name: house-price-pipeline
+#   EOF
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: house-price-pipeline-v1
+  namespace: argo
+spec:
+  serviceAccountName: argo-workflow
+  entrypoint: main
+
+  arguments:
+    parameters:
+      - name: pipeline-image
+        value: "docker.io/edaraanand/house-price-ai:pipeline-cfe34d4"
+      - name: mlflow-tracking-uri
+        value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
+      - name: model-name
+        value: "xgboost-regression"
+
+  templates:
+    - name: main
+      dag:
+        tasks:
+          - name: train
+            template: train
+
+          - name: resolve-baseline
+            template: resolve-baseline
+
+          - name: evaluate
+            template: evaluate
+            dependencies: [train, resolve-baseline]
+            arguments:
+              parameters:
+                - name: candidate-version
+                  value: "{{tasks.train.outputs.parameters.candidate-version}}"
+                - name: baseline-version
+                  value: "{{tasks.resolve-baseline.outputs.result}}"
+
+          - name: promote
+            template: promote
+            dependencies: [evaluate]
+            when: "{{tasks.evaluate.outputs.parameters.passed}} == true"
+            arguments:
+              parameters:
+                - name: version
+                  value: "{{tasks.train.outputs.parameters.candidate-version}}"
+
+          - name: restart-serving
+            template: restart-serving
+            dependencies: [promote]
+            when: "{{tasks.promote.status}} == Succeeded"
+
+    - name: train
+      container:
+        image: "{{workflow.parameters.pipeline-image}}"
+        command: [sh, -c]
+        args:
+          - "mkdir -p /tmp/outputs && python train.py"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: MLFLOW_MODEL_NAME
+            value: "{{workflow.parameters.model-name}}"
+          - name: MLFLOW_EXPERIMENT_NAME
+            value: "{{workflow.parameters.model-name}}"
+          - name: PIPELINE_OUTPUT_DIR
+            value: /tmp/outputs
+      outputs:
+        parameters:
+          - name: candidate-version
+            valueFrom:
+              path: /tmp/outputs/model_version
+          - name: rmse
+            valueFrom:
+              path: /tmp/outputs/rmse
+
+    - name: resolve-baseline
+      script:
+        image: "{{workflow.parameters.pipeline-image}}"
+        command: [python]
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: MLFLOW_MODEL_NAME
+            value: "{{workflow.parameters.model-name}}"
+        source: |
+          import os
+          from mlflow import MlflowClient
+
+          client = MlflowClient(tracking_uri=os.environ["MLFLOW_TRACKING_URI"])
+          name = os.environ["MLFLOW_MODEL_NAME"]
+
+          # "0" means no baseline yet -> evaluate.py auto-bootstraps.
+          version = "0"
+          try:
+              model = client.get_registered_model(name)
+              alias_version = model.aliases.get("production")
+              if alias_version:
+                  version = str(alias_version)
+          except Exception:
+              pass
+
+          print(version)
+
+    - name: evaluate
+      inputs:
+        parameters:
+          - name: candidate-version
+          - name: baseline-version
+      container:
+        image: "{{workflow.parameters.pipeline-image}}"
+        command: [sh, -c]
+        args:
+          - "mkdir -p /tmp/outputs && python evaluate.py --candidate-version {{inputs.parameters.candidate-version}} --baseline-version {{inputs.parameters.baseline-version}}"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: MLFLOW_MODEL_NAME
+            value: "{{workflow.parameters.model-name}}"
+          - name: PIPELINE_OUTPUT_DIR
+            value: /tmp/outputs
+      outputs:
+        parameters:
+          - name: passed
+            valueFrom:
+              path: /tmp/outputs/passed
+
+    - name: promote
+      inputs:
+        parameters:
+          - name: version
+      container:
+        image: "{{workflow.parameters.pipeline-image}}"
+        command: [python, promote.py]
+        args:
+          - "--version"
+          - "{{inputs.parameters.version}}"
+          - "--stage"
+          - "Production"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "{{workflow.parameters.mlflow-tracking-uri}}"
+          - name: MLFLOW_MODEL_NAME
+            value: "{{workflow.parameters.model-name}}"
+
+    - name: restart-serving
+      container:
+        image: "docker.io/bitnami/kubectl:latest"
+        command:
+          - kubectl
+          - -n
+          - mlops
+          - rollout
+          - restart
+          - deployment/house-price-serving
