@@ -1,0 +1,21 @@
+model:
+  name: xgboost-regression
+
+dataset:
+  name: california_housing
+  test_size: 0.2
+  random_state: 42
+
+training:
+  n_estimators: 200
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  objective: reg:squarederror
+  random_state: 42
+
+evaluation:
+  primary_metric: rmse
+  min_rmse_improvement: 0.05
+  min_r2: 0.50

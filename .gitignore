@@ -1,0 +1,10 @@
+mlruns/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.venv/
+flow_test.md
+concepts.md
+readme.md
+test_mlflow.py
