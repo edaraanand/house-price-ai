@@ -68,7 +68,7 @@ spec:
       #   config.yaml
       #
       - name: pipeline-image
-        value: "docker.io/edaraanand/house-price-ai:pipeline-f89bd1f"
+        value: "docker.io/edaraanand/house-price-ai:pipeline-ea0ee3e"
       - name: mlflow-tracking-uri
         value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
 
