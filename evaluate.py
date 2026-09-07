@@ -15,6 +15,11 @@ from src.evaluation import (
 ROOT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT_DIR / "config.yaml"
 
+# When set (e.g. by the Argo Workflows pipeline), whether the candidate
+# passed the promotion gate is written here so a downstream pipeline
+# step can branch on it.
+PIPELINE_OUTPUT_DIR = os.getenv("PIPELINE_OUTPUT_DIR")
+
 
 def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as file:
@@ -36,6 +41,11 @@ def parse_args():
         "--baseline-version",
         type=int,
         required=True,
+        help=(
+            "Version currently in production. Pass 0 when there is no "
+            "baseline yet (first model ever trained) — the candidate is "
+            "then auto-approved for promotion."
+        ),
     )
 
     return parser.parse_args()
@@ -72,6 +82,16 @@ def evaluate_model(model, X_test, y_test):
     }
 
 
+def write_pipeline_outputs(passed):
+    if not PIPELINE_OUTPUT_DIR:
+        return
+
+    output_dir = Path(PIPELINE_OUTPUT_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    (output_dir / "passed").write_text("true" if passed else "false")
+
+
 def main():
     args = parse_args()
     config = load_config()
@@ -91,18 +111,9 @@ def main():
         f"{model_base_uri}/{args.candidate_version}"
     )
 
-    baseline_uri = (
-        f"{model_base_uri}/{args.baseline_version}"
-    )
-
     print("Loading candidate model...")
     candidate_model = mlflow.pyfunc.load_model(
         candidate_uri
-    )
-
-    print("Loading baseline model...")
-    baseline_model = mlflow.pyfunc.load_model(
-        baseline_uri
     )
 
     X, y = load_california_housing()
@@ -122,29 +133,6 @@ def main():
         y_test,
     )
 
-    baseline_metrics = evaluate_model(
-        baseline_model,
-        X_test,
-        y_test,
-    )
-
-    improvement = calculate_rmse_improvement(
-        candidate_rmse=candidate_metrics["rmse"],
-        baseline_rmse=baseline_metrics["rmse"],
-    )
-
-    evaluation_config = config["evaluation"]
-
-    passed = passes_promotion_gate(
-        candidate_rmse=candidate_metrics["rmse"],
-        baseline_rmse=baseline_metrics["rmse"],
-        candidate_r2=candidate_metrics["r2"],
-        min_rmse_improvement=evaluation_config[
-            "min_rmse_improvement"
-        ],
-        min_r2=evaluation_config["min_r2"],
-    )
-
     print()
     print("=" * 60)
     print("MODEL EVALUATION")
@@ -152,10 +140,6 @@ def main():
 
     print(
         f"Candidate version: {args.candidate_version}"
-    )
-
-    print(
-        f"Baseline version:  {args.baseline_version}"
     )
 
     print()
@@ -170,22 +154,70 @@ def main():
         f"  R2:   {candidate_metrics['r2']:.4f}"
     )
 
-    print()
-    print("Baseline:")
-    print(
-        f"  RMSE: {baseline_metrics['rmse']:.4f}"
-    )
-    print(
-        f"  MAE:  {baseline_metrics['mae']:.4f}"
-    )
-    print(
-        f"  R2:   {baseline_metrics['r2']:.4f}"
-    )
+    evaluation_config = config["evaluation"]
 
-    print()
-    print(
-        f"RMSE improvement: {improvement * 100:.2f}%"
-    )
+    if args.baseline_version == 0:
+        # No baseline exists yet — nothing to compare against, so the
+        # first-ever candidate is auto-approved as long as it clears the
+        # minimum R2 bar on its own.
+        print()
+        print("Baseline version:  none (bootstrap)")
+        print(
+            "No production model exists yet — skipping RMSE "
+            "comparison."
+        )
+
+        passed = candidate_metrics["r2"] >= evaluation_config["min_r2"]
+
+    else:
+        baseline_uri = (
+            f"{model_base_uri}/{args.baseline_version}"
+        )
+
+        print("Loading baseline model...")
+        baseline_model = mlflow.pyfunc.load_model(
+            baseline_uri
+        )
+
+        baseline_metrics = evaluate_model(
+            baseline_model,
+            X_test,
+            y_test,
+        )
+
+        improvement = calculate_rmse_improvement(
+            candidate_rmse=candidate_metrics["rmse"],
+            baseline_rmse=baseline_metrics["rmse"],
+        )
+
+        passed = passes_promotion_gate(
+            candidate_rmse=candidate_metrics["rmse"],
+            baseline_rmse=baseline_metrics["rmse"],
+            candidate_r2=candidate_metrics["r2"],
+            min_rmse_improvement=evaluation_config[
+                "min_rmse_improvement"
+            ],
+            min_r2=evaluation_config["min_r2"],
+        )
+
+        print(
+            f"Baseline version:  {args.baseline_version}"
+        )
+        print()
+        print("Baseline:")
+        print(
+            f"  RMSE: {baseline_metrics['rmse']:.4f}"
+        )
+        print(
+            f"  MAE:  {baseline_metrics['mae']:.4f}"
+        )
+        print(
+            f"  R2:   {baseline_metrics['r2']:.4f}"
+        )
+        print()
+        print(
+            f"RMSE improvement: {improvement * 100:.2f}%"
+        )
 
     print()
 
@@ -197,6 +229,8 @@ def main():
         print("Candidate must not be promoted.")
 
     print("=" * 60)
+
+    write_pipeline_outputs(passed)
 
 
 if __name__ == "__main__":

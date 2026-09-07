@@ -72,6 +72,23 @@ def main():
         f"is now {args.stage}."
     )
 
+    # The serving side (serving/service.py) loads the model by alias
+    # (models:/<name>@<alias>), not by classic registry stage — so the
+    # stage transition above is for bookkeeping/visibility only. Setting
+    # the matching alias here is what actually makes the promotion take
+    # effect for anything reading models:/<name>@<alias>.
+    alias = args.stage.lower()
+
+    client.set_registered_model_alias(
+        name=model_name,
+        alias=alias,
+        version=str(args.version),
+    )
+
+    print(
+        f"✓ Alias @{alias} -> version {args.version}"
+    )
+
 
 if __name__ == "__main__":
     main()

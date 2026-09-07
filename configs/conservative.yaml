@@ -1,0 +1,15 @@
+data:
+  path: data/train.csv
+  target: SalePrice
+
+model:
+  n_estimators: 1000
+  max_depth: 4
+  learning_rate: 0.02
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_weight: 3
+
+training:
+  test_size: 0.2
+  random_state: 42

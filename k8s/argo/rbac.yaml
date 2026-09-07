@@ -1,0 +1,31 @@
+# Grants the Argo Workflows workflow ServiceAccount ("argo-workflow", in the
+# "argo" namespace) permission to restart the serving Deployment in "mlops"
+# after a promotion, so newly-promoted models actually get loaded.
+#
+# The ServiceAccount itself is created by the argo-workflows Helm chart
+# when `workflow.serviceAccount.create: true` is set in its values
+# (see the accompanying pipeline README notes) — this file only adds the
+# cross-namespace Role/RoleBinding, it does not create the ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-mlops-deploy
+  namespace: mlops
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-mlops-deploy
+  namespace: mlops
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+    namespace: argo
+roleRef:
+  kind: Role
+  name: argo-workflow-mlops-deploy
+  apiGroup: rbac.authorization.k8s.io
