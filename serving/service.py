@@ -6,14 +6,13 @@ import mlflow
 import pandas as pd
 from opentelemetry.trace import Status, StatusCode
 
-from observability import (
+from serving.observability import (
     configure_observability,
     logger,
     request_id_ctx,
     tracer,
 )
 from serving.schemas import HousingRequest, HousingResponse
-
 
 MLFLOW_TRACKING_URI = os.getenv(
     "MLFLOW_TRACKING_URI",
