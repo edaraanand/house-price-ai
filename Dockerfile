@@ -1,22 +1,31 @@
 FROM python:3.11-slim
 
+# Python runtime settings
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-RUN pip install --no-cache-dir --upgrade pip
-
+# Install Python dependencies
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy serving application
 COPY serving/ ./serving/
-COPY src/ ./src/
 
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+# BentoML serving port
 EXPOSE 3000
 
-CMD ["bentoml", "serve", "serving.service:HousingModelService", "--host", "0.0.0.0", "--port", "3000"]
+# Start BentoML server
+CMD ["bentoml", "serve", "serving.service:HousePriceServing", "--host", "0.0.0.0", "--port", "3000"]
 
 # FROM python:3.11-slim
 
