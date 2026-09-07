@@ -54,7 +54,7 @@ USER appuser
 EXPOSE 3000
 
 # Start BentoML server
-CMD ["bentoml", "serve", "serving.service:HousePriceServing", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["bentoml", "serve", "serving.service:HousingModelService", "--host", "0.0.0.0", "--port", "3000"]
 
 # FROM python:3.11-slim
 
