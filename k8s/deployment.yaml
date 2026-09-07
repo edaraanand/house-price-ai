@@ -33,7 +33,7 @@ spec:
               value: "http://mlflow-mlflow.mlflow.svc.cluster.local:5000"
 
             - name: MLFLOW_MODEL_NAME
-              value: "xgboost-regression"
+              value: "california_housing_ai"
 
             - name: MLFLOW_MODEL_ALIAS
               value: "production"

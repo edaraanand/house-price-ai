@@ -35,7 +35,7 @@ training:
     random_state: 42
 
 tuning:
-  max_workers: 6
+  max_workers: 4
 
   xgboost:
     max_depth:

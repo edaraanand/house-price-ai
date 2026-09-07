@@ -8,7 +8,8 @@ FROM python:3.11-slim AS pipeline
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    SKLEARN_DATA_HOME=/home/appuser/scikit_learn_data
 
 WORKDIR /app
 
@@ -18,10 +19,29 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY multi_train.py tune.py evaluate.py promote.py config.yaml ./
 
+# Create non-root user and dataset cache directory.
 RUN useradd --create-home --shell /bin/bash appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /home/appuser/scikit_learn_data \
+    && chown -R appuser:appuser /app /home/appuser
 
 USER appuser
+
+# Pre-download the California Housing dataset into the image.
+#
+# This happens at IMAGE BUILD TIME, not during every tuning worker.
+# RUN python - <<'PY'
+# from sklearn.datasets import fetch_california_housing
+
+# data = fetch_california_housing(
+#     data_home="/home/appuser/scikit_learn_data",
+#     download_if_missing=True,
+# )
+
+# print(
+#     f"California Housing dataset ready: "
+#     f"{data.data.shape}"
+# )
+# PY
 
 # No CMD/ENTRYPOINT: the Argo Workflow steps supply the command
 # (python train.py / python evaluate.py ... / python promote.py ...)
@@ -55,26 +75,3 @@ EXPOSE 3000
 
 # Start BentoML server
 CMD ["bentoml", "serve", "serving.service:HousingModelService", "--host", "0.0.0.0", "--port", "3000"]
-
-# FROM python:3.11-slim
-
-# ENV PYTHONUNBUFFERED=1
-# ENV PYTHONDONTWRITEBYTECODE=1
-
-# WORKDIR /app
-
-# # System packages needed by scientific Python packages
-# RUN apt-get update && \
-#     apt-get install -y --no-install-recommends \
-#         build-essential \
-#         curl && \
-#     rm -rf /var/lib/apt/lists/*
-
-# COPY requirements.txt .
-
-# RUN pip install --no-cache-dir --upgrade pip && \
-#     pip install --no-cache-dir -r requirements.txt
-
-# COPY src/ ./src/
-
-# CMD ["python", "src/train.py"]

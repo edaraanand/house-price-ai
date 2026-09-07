@@ -272,9 +272,11 @@ def main_tuning():
     # tuning:
     #   max_workers: 4
 
-    max_workers = tuning_config.get(
-        "max_workers",
-        4,
+    max_workers = int(
+        os.getenv(
+            "TUNING_MAX_WORKERS",
+            tuning_config.get("max_workers", 4),
+        )
     )
 
     # ==================================================

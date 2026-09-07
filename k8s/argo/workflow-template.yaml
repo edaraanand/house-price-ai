@@ -27,15 +27,15 @@
 #
 # Or:
 #
-#   kubectl create -n argo -f - <<'EOF'
-#   apiVersion: argoproj.io/v1alpha1
-#   kind: Workflow
-#   metadata:
-#     generateName: house-price-pipeline-
-#   spec:
-#     workflowTemplateRef:
-#       name: house-price-pipeline
-#   EOF
+# kubectl create -n argo -f - <<'EOF'
+# apiVersion: argoproj.io/v1alpha1
+# kind: Workflow
+# metadata:
+#   generateName: house-price-pipeline-
+# spec:
+#   workflowTemplateRef:
+#     name: house-price-pipeline
+# EOF
 #
 # ============================================================
 
@@ -78,7 +78,7 @@ spec:
       # It can contain XGBoost, Random Forest, or
       # HistGradientBoosting depending on which wins.
       - name: model-name
-        value: "california_housing_model"
+        value: "california_housing_ai"
 
       # Number of parallel tuning workers.
       #
