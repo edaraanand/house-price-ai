@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: house-price-serving
+  namespace: mlops
+  labels:
+    app: house-price-serving
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app: house-price-serving
+
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
