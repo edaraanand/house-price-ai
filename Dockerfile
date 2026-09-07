@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
-COPY train.py evaluate.py promote.py config.yaml ./
+COPY multi_train.py tune.py evaluate.py promote.py config.yaml ./
 
 RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
