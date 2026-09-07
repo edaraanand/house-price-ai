@@ -133,6 +133,44 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # --- Bump image tags in the k8s manifests ArgoCD watches ---
+  # CI never edits git on its own; without this, k8s/deployment.yaml and
+  # k8s/argo/workflow-template.yaml would keep pointing at whatever tag
+  # was last committed by hand, and ArgoCD would have nothing new to sync.
+  update-manifests:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Bump image tags
+        run: |
+          SHA_SHORT="${{ needs.build-and-push.outputs.image-tag }}"
+
+          sed -E -i "s|(image: edaraanand/house-price-ai:).*|\1${SHA_SHORT}|" k8s/deployment.yaml
+          sed -E -i "s|(docker.io/edaraanand/house-price-ai:pipeline)[^\"]*|\1-${SHA_SHORT}|" k8s/argo/workflow-template.yaml
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No manifest changes to commit."
+            exit 0
+          fi
+
+          git add k8s/deployment.yaml k8s/argo/workflow-template.yaml
+          git commit -m "ci: bump image tags to ${SHA_SHORT} [skip ci]"
+          git push origin HEAD:main
+        env:
+          SHA_SHORT: ${{ needs.build-and-push.outputs.image-tag }}
+
   # --- SBOM ---
   sbom:
     needs: build-and-push
