@@ -27,7 +27,7 @@ def load_california_housing() -> Tuple[pd.DataFrame, pd.Series]:
     data = fetch_california_housing(
         data_home=SKLEARN_DATA_HOME,
         as_frame=True,
-        download_if_missing=False,
+        # download_if_missing=False,
     )
 
     X = data.data
