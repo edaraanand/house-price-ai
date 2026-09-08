@@ -6,10 +6,10 @@ from sklearn.datasets import fetch_california_housing
 from sklearn.model_selection import train_test_split
 
 
-SKLEARN_DATA_HOME = os.getenv(
-    "SKLEARN_DATA_HOME",
-    "/home/appuser/scikit_learn_data",
-)
+# SKLEARN_DATA_HOME = os.getenv(
+#     "SKLEARN_DATA_HOME",
+#     "/home/appuser/scikit_learn_data",
+# )
 
 
 def load_california_housing() -> Tuple[pd.DataFrame, pd.Series]:
@@ -25,7 +25,7 @@ def load_california_housing() -> Tuple[pd.DataFrame, pd.Series]:
         y: target series
     """
     data = fetch_california_housing(
-        data_home=SKLEARN_DATA_HOME,
+        # data_home=SKLEARN_DATA_HOME,
         as_frame=True,
         # download_if_missing=False,
     )
