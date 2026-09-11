@@ -49,11 +49,11 @@ import xgboost as xgb
 import yaml
 
 from src.data import load_california_housing, split_data
-from src.training import train_model
+from src.training_v1 import train_model
 
 
 ROOT_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = ROOT_DIR / "config.yaml"
+CONFIG_PATH = ROOT_DIR / "config-v1.yaml"
 
 PIPELINE_OUTPUT_DIR = os.getenv("PIPELINE_OUTPUT_DIR")
 

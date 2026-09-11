@@ -38,6 +38,15 @@ spec:
             - name: MLFLOW_MODEL_ALIAS
               value: "production"
 
+            # - name: KAFKA_BOOTSTRAP_SERVERS
+            #   value: "kafka-kafka-bootstrap.kafka.svc.cluster.local:9092"
+
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "redpanda-0.redpanda.redpanda.svc.cluster.local:9093"
+
+            - name: KAFKA_TOPIC
+              value: "housing.predictions"
+
           resources:
             requests:
               cpu: "100m"
@@ -50,12 +59,16 @@ spec:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 10
-            periodSeconds: 10
+              initialDelaySeconds: 10
+              periodSeconds: 10
+              timeoutSeconds: 2
+              failureThreshold: 3
 
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 30
-            periodSeconds: 20
+              initialDelaySeconds: 30
+              periodSeconds: 20
+              timeoutSeconds: 2
+              failureThreshold: 3

@@ -5,6 +5,7 @@ import bentoml
 import mlflow
 import pandas as pd
 from opentelemetry.trace import Status, StatusCode
+from serving.kafka import publish_prediction
 
 from serving.observability import (
     configure_observability,
@@ -131,6 +132,13 @@ class HousingModelService:
 
                 raise
 
+    @bentoml.api(route="/healthz")
+    def healthz(self) -> dict:
+        return {
+            "status": "ok",
+            "service": "house-price-serving",
+        }
+
     @bentoml.api
     def predict(
         self,
@@ -200,6 +208,7 @@ class HousingModelService:
                         data
                     )
 
+
                     predict_duration_ms = (
                         time.perf_counter()
                         - predict_start
@@ -222,6 +231,32 @@ class HousingModelService:
                 result = float(
                     prediction[0]
                 )
+
+                total_duration_ms = (
+                    time.perf_counter() - request_start
+                ) * 1000
+
+                event = {
+                    "event_type": "housing_prediction",
+                    "timestamp": pd.Timestamp.utcnow().isoformat(),
+                    "request_id": request_id,
+                    "service": "house-price-ai",
+                    "model": {
+                        "name": MLFLOW_MODEL_NAME,
+                        "alias": MLFLOW_MODEL_ALIAS,
+                    },
+
+                    "features": input_data.model_dump(),
+
+                    "prediction": result,
+
+                    "performance": {
+                        "prediction_duration_ms": predict_duration_ms,
+                        "request_duration_ms": total_duration_ms,
+                    }
+                }
+
+                publish_prediction(event)
 
                 total_duration_ms = (
                     time.perf_counter()
