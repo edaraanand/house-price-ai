@@ -4,18 +4,20 @@ import time
 import bentoml
 import mlflow
 import pandas as pd
+from mlflow import MlflowClient
 from opentelemetry.trace import Status, StatusCode
-from serving.kafka import publish_prediction
 
+from serving.kafka import publish_prediction
 from serving.observability import (
     configure_observability,
     logger,
     request_id_ctx,
-    tracer,
+    reset_request_id,
     set_request_id,
-    reset_request_id
+    tracer,
 )
 from serving.schemas import HousingRequest, HousingResponse
+
 
 MLFLOW_TRACKING_URI = os.getenv(
     "MLFLOW_TRACKING_URI",
@@ -33,12 +35,10 @@ MLFLOW_MODEL_ALIAS = os.getenv(
 )
 
 
-mlflow.set_tracking_uri(
-    MLFLOW_TRACKING_URI
-)
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 
-# Configure OTel when the worker imports the service.
+# Configure OpenTelemetry when the worker imports the service.
 configure_observability()
 
 
@@ -57,18 +57,54 @@ class HousingModelService:
             f"@{MLFLOW_MODEL_ALIAS}"
         )
 
+        #
+        # Resolve the alias once when the worker starts.
+        #
+        # This gives us the concrete MLflow model version
+        # that this BentoML worker is actually serving.
+        #
+
+        client = MlflowClient()
+
+        model_version = client.get_model_version_by_alias(
+            MLFLOW_MODEL_NAME,
+            MLFLOW_MODEL_ALIAS,
+        )
+
+        self.model_info = {
+            "name": MLFLOW_MODEL_NAME,
+            "alias": MLFLOW_MODEL_ALIAS,
+            "version": str(model_version.version),
+            "run_id": model_version.run_id,
+            "source": model_version.source,
+        }
+
+        #
+        # Load model
+        #
+
         with tracer.start_as_current_span(
             "housing.model.load"
         ) as span:
 
             span.set_attribute(
                 "mlflow.model.name",
-                MLFLOW_MODEL_NAME,
+                self.model_info["name"],
             )
 
             span.set_attribute(
                 "mlflow.model.alias",
-                MLFLOW_MODEL_ALIAS,
+                self.model_info["alias"],
+            )
+
+            span.set_attribute(
+                "mlflow.model.version",
+                self.model_info["version"],
+            )
+
+            span.set_attribute(
+                "mlflow.model.run_id",
+                self.model_info["run_id"],
             )
 
             span.set_attribute(
@@ -83,8 +119,10 @@ class HousingModelService:
                 logger.info(
                     "model_loading",
                     extra={
-                        "model_name": MLFLOW_MODEL_NAME,
-                        "model_alias": MLFLOW_MODEL_ALIAS,
+                        "model_name": self.model_info["name"],
+                        "model_alias": self.model_info["alias"],
+                        "model_version": self.model_info["version"],
+                        "model_run_id": self.model_info["run_id"],
                     },
                 )
 
@@ -101,11 +139,17 @@ class HousingModelService:
                     elapsed_ms,
                 )
 
+                span.set_status(
+                    Status(StatusCode.OK)
+                )
+
                 logger.info(
                     "model_loaded",
                     extra={
-                        "model_name": MLFLOW_MODEL_NAME,
-                        "model_alias": MLFLOW_MODEL_ALIAS,
+                        "model_name": self.model_info["name"],
+                        "model_alias": self.model_info["alias"],
+                        "model_version": self.model_info["version"],
+                        "model_run_id": self.model_info["run_id"],
                         "duration_ms": round(
                             elapsed_ms,
                             2,
@@ -127,8 +171,10 @@ class HousingModelService:
                 logger.exception(
                     "model_load_failed",
                     extra={
-                        "model_name": MLFLOW_MODEL_NAME,
-                        "model_alias": MLFLOW_MODEL_ALIAS,
+                        "model_name": self.model_info["name"],
+                        "model_alias": self.model_info["alias"],
+                        "model_version": self.model_info["version"],
+                        "model_run_id": self.model_info["run_id"],
                     },
                 )
 
@@ -150,6 +196,7 @@ class HousingModelService:
         token = set_request_id()
 
         try:
+
             request_id = request_id_ctx.get()
 
             with tracer.start_as_current_span(
@@ -158,6 +205,10 @@ class HousingModelService:
 
                 request_start = time.perf_counter()
 
+                #
+                # Request / model metadata
+                #
+
                 span.set_attribute(
                     "housing.request_id",
                     request_id,
@@ -165,15 +216,29 @@ class HousingModelService:
 
                 span.set_attribute(
                     "mlflow.model.name",
-                    MLFLOW_MODEL_NAME,
+                    self.model_info["name"],
                 )
 
                 span.set_attribute(
                     "mlflow.model.alias",
-                    MLFLOW_MODEL_ALIAS,
+                    self.model_info["alias"],
+                )
+
+                span.set_attribute(
+                    "mlflow.model.version",
+                    self.model_info["version"],
+                )
+
+                span.set_attribute(
+                    "mlflow.model.run_id",
+                    self.model_info["run_id"],
                 )
 
                 try:
+
+                    #
+                    # Prepare input
+                    #
 
                     data = pd.DataFrame(
                         [
@@ -196,6 +261,10 @@ class HousingModelService:
                         extra={
                             "endpoint": "/predict",
                             "request_id": request_id,
+                            "model_name": self.model_info["name"],
+                            "model_alias": self.model_info["alias"],
+                            "model_version": self.model_info["version"],
+                            "model_run_id": self.model_info["run_id"],
                         },
                     )
 
@@ -213,11 +282,15 @@ class HousingModelService:
                             data
                         )
 
-
                         predict_duration_ms = (
                             time.perf_counter()
                             - predict_start
                         ) * 1000
+
+                        predict_span.set_attribute(
+                            "mlflow.model.version",
+                            self.model_info["version"],
+                        )
 
                         predict_span.set_attribute(
                             "housing.prediction.duration_ms",
@@ -229,6 +302,10 @@ class HousingModelService:
                             len(prediction),
                         )
 
+                        predict_span.set_status(
+                            Status(StatusCode.OK)
+                        )
+
                     #
                     # Result
                     #
@@ -237,41 +314,75 @@ class HousingModelService:
                         prediction[0]
                     )
 
-                    total_duration_ms = (
-                        time.perf_counter() - request_start
+                    #
+                    # Duration before event publication.
+                    #
+                    # This represents application processing time
+                    # before publishing the event.
+                    #
+
+                    request_duration_ms = (
+                        time.perf_counter()
+                        - request_start
                     ) * 1000
+
+                    #
+                    # Prediction event
+                    #
 
                     event = {
                         "event_type": "housing_prediction",
-                        "timestamp": pd.Timestamp.utcnow().isoformat(),
-                        "request_id": request_id,
-                        "service": "house-price-ai",
-                        "model": {
-                            "name": MLFLOW_MODEL_NAME,
-                            "alias": MLFLOW_MODEL_ALIAS,
-                        },
+                        "event_version": "1",
 
-                        "features": input_data.model_dump(),
+                        "timestamp": (
+                            pd.Timestamp.utcnow().isoformat()
+                        ),
+
+                        "request_id": request_id,
+
+                        "service": "house-price-ai",
+
+                        "model": self.model_info,
+
+                        "features": (
+                            input_data.model_dump()
+                        ),
 
                         "prediction": result,
 
+                        # Ground truth can be populated later.
+                        "actual": None,
+
                         "performance": {
-                            "prediction_duration_ms": predict_duration_ms,
-                            "request_duration_ms": total_duration_ms,
-                        }
+                            "prediction_duration_ms": (
+                                predict_duration_ms
+                            ),
+                            "request_duration_ms": (
+                                request_duration_ms
+                            ),
+                        },
                     }
 
+                    #
+                    # Publish prediction event
+                    #
+
                     publish_prediction(event)
+
+                    #
+                    # Final request duration.
+                    #
+                    # This includes event publication.
+                    #
 
                     total_duration_ms = (
                         time.perf_counter()
                         - request_start
                     ) * 1000
 
-                    span.set_attribute(
-                        "housing.prediction",
-                        result,
-                    )
+                    #
+                    # Trace
+                    #
 
                     span.set_attribute(
                         "housing.request.duration_ms",
@@ -282,16 +393,44 @@ class HousingModelService:
                         Status(StatusCode.OK)
                     )
 
+                    #
+                    # Log
+                    #
+
                     logger.info(
                         "prediction_completed",
                         extra={
                             "endpoint": "/predict",
                             "request_id": request_id,
+
+                            "model_name": (
+                                self.model_info["name"]
+                            ),
+
+                            "model_alias": (
+                                self.model_info["alias"]
+                            ),
+
+                            "model_version": (
+                                self.model_info["version"]
+                            ),
+
+                            "model_run_id": (
+                                self.model_info["run_id"]
+                            ),
+
                             "duration_ms": round(
                                 total_duration_ms,
                                 2,
                             ),
+
+                            "prediction_duration_ms": round(
+                                predict_duration_ms,
+                                2,
+                            ),
+
                             "prediction": result,
+
                             "status": 200,
                         },
                     )
@@ -321,6 +460,23 @@ class HousingModelService:
                         extra={
                             "endpoint": "/predict",
                             "request_id": request_id,
+
+                            "model_name": (
+                                self.model_info["name"]
+                            ),
+
+                            "model_alias": (
+                                self.model_info["alias"]
+                            ),
+
+                            "model_version": (
+                                self.model_info["version"]
+                            ),
+
+                            "model_run_id": (
+                                self.model_info["run_id"]
+                            ),
+
                             "duration_ms": round(
                                 elapsed_ms,
                                 2,
@@ -329,5 +485,6 @@ class HousingModelService:
                     )
 
                     raise
+
         finally:
             reset_request_id(token)
