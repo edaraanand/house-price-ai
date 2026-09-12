@@ -12,6 +12,8 @@ from serving.observability import (
     logger,
     request_id_ctx,
     tracer,
+    set_request_id,
+    reset_request_id
 )
 from serving.schemas import HousingRequest, HousingResponse
 
@@ -145,182 +147,187 @@ class HousingModelService:
         input_data: HousingRequest,
     ) -> HousingResponse:
 
-        request_id = request_id_ctx.get()
+        token = set_request_id()
 
-        with tracer.start_as_current_span(
-            "housing.predict"
-        ) as span:
+        try:
+            request_id = request_id_ctx.get()
 
-            request_start = time.perf_counter()
+            with tracer.start_as_current_span(
+                "housing.predict"
+            ) as span:
 
-            span.set_attribute(
-                "housing.request_id",
-                request_id,
-            )
+                request_start = time.perf_counter()
 
-            span.set_attribute(
-                "mlflow.model.name",
-                MLFLOW_MODEL_NAME,
-            )
-
-            span.set_attribute(
-                "mlflow.model.alias",
-                MLFLOW_MODEL_ALIAS,
-            )
-
-            try:
-
-                data = pd.DataFrame(
-                    [
-                        input_data.model_dump()
-                    ]
+                span.set_attribute(
+                    "housing.request_id",
+                    request_id,
                 )
 
                 span.set_attribute(
-                    "housing.input.columns",
-                    len(data.columns),
+                    "mlflow.model.name",
+                    MLFLOW_MODEL_NAME,
                 )
 
                 span.set_attribute(
-                    "housing.input.rows",
-                    len(data),
+                    "mlflow.model.alias",
+                    MLFLOW_MODEL_ALIAS,
                 )
 
-                logger.info(
-                    "prediction_started",
-                    extra={
-                        "endpoint": "/predict",
-                        "request_id": request_id,
-                    },
-                )
+                try:
 
-                #
-                # Model inference
-                #
-
-                with tracer.start_as_current_span(
-                    "housing.model.predict"
-                ) as predict_span:
-
-                    predict_start = time.perf_counter()
-
-                    prediction = self.model.predict(
-                        data
+                    data = pd.DataFrame(
+                        [
+                            input_data.model_dump()
+                        ]
                     )
 
+                    span.set_attribute(
+                        "housing.input.columns",
+                        len(data.columns),
+                    )
 
-                    predict_duration_ms = (
-                        time.perf_counter()
-                        - predict_start
+                    span.set_attribute(
+                        "housing.input.rows",
+                        len(data),
+                    )
+
+                    logger.info(
+                        "prediction_started",
+                        extra={
+                            "endpoint": "/predict",
+                            "request_id": request_id,
+                        },
+                    )
+
+                    #
+                    # Model inference
+                    #
+
+                    with tracer.start_as_current_span(
+                        "housing.model.predict"
+                    ) as predict_span:
+
+                        predict_start = time.perf_counter()
+
+                        prediction = self.model.predict(
+                            data
+                        )
+
+
+                        predict_duration_ms = (
+                            time.perf_counter()
+                            - predict_start
+                        ) * 1000
+
+                        predict_span.set_attribute(
+                            "housing.prediction.duration_ms",
+                            predict_duration_ms,
+                        )
+
+                        predict_span.set_attribute(
+                            "housing.prediction.count",
+                            len(prediction),
+                        )
+
+                    #
+                    # Result
+                    #
+
+                    result = float(
+                        prediction[0]
+                    )
+
+                    total_duration_ms = (
+                        time.perf_counter() - request_start
                     ) * 1000
 
-                    predict_span.set_attribute(
-                        "housing.prediction.duration_ms",
-                        predict_duration_ms,
-                    )
-
-                    predict_span.set_attribute(
-                        "housing.prediction.count",
-                        len(prediction),
-                    )
-
-                #
-                # Result
-                #
-
-                result = float(
-                    prediction[0]
-                )
-
-                total_duration_ms = (
-                    time.perf_counter() - request_start
-                ) * 1000
-
-                event = {
-                    "event_type": "housing_prediction",
-                    "timestamp": pd.Timestamp.utcnow().isoformat(),
-                    "request_id": request_id,
-                    "service": "house-price-ai",
-                    "model": {
-                        "name": MLFLOW_MODEL_NAME,
-                        "alias": MLFLOW_MODEL_ALIAS,
-                    },
-
-                    "features": input_data.model_dump(),
-
-                    "prediction": result,
-
-                    "performance": {
-                        "prediction_duration_ms": predict_duration_ms,
-                        "request_duration_ms": total_duration_ms,
-                    }
-                }
-
-                publish_prediction(event)
-
-                total_duration_ms = (
-                    time.perf_counter()
-                    - request_start
-                ) * 1000
-
-                span.set_attribute(
-                    "housing.prediction",
-                    result,
-                )
-
-                span.set_attribute(
-                    "housing.request.duration_ms",
-                    total_duration_ms,
-                )
-
-                span.set_status(
-                    Status(StatusCode.OK)
-                )
-
-                logger.info(
-                    "prediction_completed",
-                    extra={
-                        "endpoint": "/predict",
+                    event = {
+                        "event_type": "housing_prediction",
+                        "timestamp": pd.Timestamp.utcnow().isoformat(),
                         "request_id": request_id,
-                        "duration_ms": round(
-                            total_duration_ms,
-                            2,
-                        ),
+                        "service": "house-price-ai",
+                        "model": {
+                            "name": MLFLOW_MODEL_NAME,
+                            "alias": MLFLOW_MODEL_ALIAS,
+                        },
+
+                        "features": input_data.model_dump(),
+
                         "prediction": result,
-                        "status": 200,
-                    },
-                )
 
-                return HousingResponse(
-                    prediction=result
-                )
+                        "performance": {
+                            "prediction_duration_ms": predict_duration_ms,
+                            "request_duration_ms": total_duration_ms,
+                        }
+                    }
 
-            except Exception as ex:
+                    publish_prediction(event)
 
-                elapsed_ms = (
-                    time.perf_counter()
-                    - request_start
-                ) * 1000
+                    total_duration_ms = (
+                        time.perf_counter()
+                        - request_start
+                    ) * 1000
 
-                span.record_exception(ex)
-
-                span.set_status(
-                    Status(
-                        StatusCode.ERROR,
-                        str(ex),
+                    span.set_attribute(
+                        "housing.prediction",
+                        result,
                     )
-                )
 
-                logger.exception(
-                    "prediction_failed",
-                    extra={
-                        "endpoint": "/predict",
-                        "request_id": request_id,
-                        "duration_ms": round(
-                            elapsed_ms,
-                            2,
-                        ),
-                    },
-                )
+                    span.set_attribute(
+                        "housing.request.duration_ms",
+                        total_duration_ms,
+                    )
 
-                raise
+                    span.set_status(
+                        Status(StatusCode.OK)
+                    )
+
+                    logger.info(
+                        "prediction_completed",
+                        extra={
+                            "endpoint": "/predict",
+                            "request_id": request_id,
+                            "duration_ms": round(
+                                total_duration_ms,
+                                2,
+                            ),
+                            "prediction": result,
+                            "status": 200,
+                        },
+                    )
+
+                    return HousingResponse(
+                        prediction=result
+                    )
+
+                except Exception as ex:
+
+                    elapsed_ms = (
+                        time.perf_counter()
+                        - request_start
+                    ) * 1000
+
+                    span.record_exception(ex)
+
+                    span.set_status(
+                        Status(
+                            StatusCode.ERROR,
+                            str(ex),
+                        )
+                    )
+
+                    logger.exception(
+                        "prediction_failed",
+                        extra={
+                            "endpoint": "/predict",
+                            "request_id": request_id,
+                            "duration_ms": round(
+                                elapsed_ms,
+                                2,
+                            ),
+                        },
+                    )
+
+                    raise
+        finally:
+            reset_request_id(token)
